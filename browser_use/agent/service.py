@@ -94,6 +94,7 @@ class Agent:
 		register_new_step_callback: Callable[['BrowserState', 'AgentOutput', int], None] | None = None,
 		register_done_callback: Callable[['AgentHistoryList'], None] | None = None,
 		tool_calling_method: Optional[str] = 'auto',
+		screenshots_dir: str = 'screenshots'
 	):
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
 
@@ -171,6 +172,9 @@ class Agent:
 		self._paused = False
 		self._stopped = False
 
+		self.screenshots_dir = screenshots_dir
+		os.makedirs(screenshots_dir, exist_ok=True)
+
 	def _set_version_and_source(self) -> None:
 		try:
 			import pkg_resources
@@ -220,13 +224,26 @@ class Agent:
 	@time_execution_async('--step')
 	async def step(self, step_info: Optional[AgentStepInfo] = None) -> None:
 		"""Execute one step of the task"""
-		logger.info(f'\n📍 Step {self.n_steps}')
 		state = None
 		model_output = None
 		result: list[ActionResult] = []
 
 		try:
 			state = await self.browser_context.get_state(use_vision=self.use_vision)
+			# Save screenshot to file and log step with link
+			if state and state.screenshot:
+				screenshot_path = os.path.join(self.screenshots_dir, f'step_{self.n_steps}.png')
+				try:
+					screenshot_data = base64.b64decode(state.screenshot)
+					with open(screenshot_path, 'wb') as f:
+						f.write(screenshot_data)
+					logger.info(f'\n📍 Step {self.n_steps} [View Screenshot]({screenshot_path})')
+				except Exception as e:
+					logger.error(f'Failed to save screenshot: {e}')
+					logger.info(f'\n📍 Step {self.n_steps}')
+			else:
+				logger.info(f'\n📍 Step {self.n_steps}')
+
 			self.message_manager.add_state_message(state, self._last_result, step_info)
 			input_messages = self.message_manager.get_messages()
 
@@ -982,7 +999,7 @@ class Agent:
 		if os.path.exists(logo_path):
 			logo = Image.open(logo_path)
 			logo.thumbnail((logo_size, logo_size))
-			frame.paste(logo, (width - logo_size - 20, 20), logo if 'A' in logo.getbands() else None)
+			frame.paste(logo, (width - logo_size - 20, 20), logo if logo.mode == 'RGBA' else None)
 
 		# Create drawing context
 		draw = ImageDraw.Draw(frame)
@@ -1028,7 +1045,7 @@ class Agent:
 			frame.paste(
 				small_logo,
 				(margin - text_padding + 10, 45),  # Positioned inside goal box
-				small_logo if 'A' in small_logo.getbands() else None,
+				small_logo if small_logo.mode == 'RGBA' else None,
 			)
 
 		# Draw text with proper wrapping

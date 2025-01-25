@@ -680,7 +680,7 @@ class BrowserContext:
 
 		screenshot_b64 = base64.b64encode(screenshot).decode('utf-8')
 
-		# await self.remove_highlights()
+		await self.remove_highlights()
 
 		return screenshot_b64
 

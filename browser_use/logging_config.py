@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import re
 
 from dotenv import load_dotenv
 
@@ -77,8 +78,11 @@ def setup_logging():
 
 	class BrowserUseFormatter(logging.Formatter):
 		def format(self, record):
+			# Preserve markdown links by not modifying the message if it contains links
 			if record.name.startswith('browser_use.'):
 				record.name = record.name.split('.')[-2]
+			if re.search(r'\[.*?\]\(.*?\)', record.msg):
+				return f"{record.levelname:<8} [{record.name}] {record.msg}"
 			return super().format(record)
 
 	# Setup single handler for all loggers
@@ -89,6 +93,7 @@ def setup_logging():
 		console.setLevel('RESULT')
 		console.setFormatter(BrowserUseFormatter('%(message)s'))
 	else:
+		# Use a format that preserves markdown in messages
 		console.setFormatter(BrowserUseFormatter('%(levelname)-8s [%(name)s] %(message)s'))
 
 	# Configure root logger only
