@@ -73,6 +73,7 @@ class Agent:
 		system_prompt_class: Type[SystemPrompt] = SystemPrompt,
 		max_input_tokens: int = 128000,
 		validate_output: bool = False,
+		message_context: Optional[str] = None,
 		generate_gif: bool | str = True,
 		include_attributes: list[str] = [
 			'title',
@@ -94,7 +95,6 @@ class Agent:
 		register_new_step_callback: Callable[['BrowserState', 'AgentOutput', int], None] | None = None,
 		register_done_callback: Callable[['AgentHistoryList'], None] | None = None,
 		tool_calling_method: Optional[str] = 'auto',
-		screenshots_dir: str = 'screenshots'
 	):
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
 
@@ -115,6 +115,7 @@ class Agent:
 		# Browser setup
 		self.injected_browser = browser is not None
 		self.injected_browser_context = browser_context is not None
+		self.message_context = message_context
 
 		# Initialize browser first if needed
 		self.browser = browser if browser is not None else (None if browser_context else Browser())
@@ -152,6 +153,7 @@ class Agent:
 			include_attributes=self.include_attributes,
 			max_error_length=self.max_error_length,
 			max_actions_per_step=self.max_actions_per_step,
+			message_context=self.message_context,
 		)
 
 		# Step callback
@@ -171,9 +173,6 @@ class Agent:
 
 		self._paused = False
 		self._stopped = False
-
-		self.screenshots_dir = screenshots_dir
-		os.makedirs(screenshots_dir, exist_ok=True)
 
 	def _set_version_and_source(self) -> None:
 		try:
@@ -224,25 +223,17 @@ class Agent:
 	@time_execution_async('--step')
 	async def step(self, step_info: Optional[AgentStepInfo] = None) -> None:
 		"""Execute one step of the task"""
+		logger.info(f'\n📍 Step {self.n_steps}')
 		state = None
 		model_output = None
 		result: list[ActionResult] = []
 
 		try:
 			state = await self.browser_context.get_state(use_vision=self.use_vision)
-			# Save screenshot to file and log step with link
-			if state and state.screenshot:
-				screenshot_path = os.path.join(self.screenshots_dir, f'step_{self.n_steps}.png')
-				try:
-					screenshot_data = base64.b64decode(state.screenshot)
-					with open(screenshot_path, 'wb') as f:
-						f.write(screenshot_data)
-					logger.info(f'\n📍 Step {self.n_steps} [View Screenshot]({screenshot_path})')
-				except Exception as e:
-					logger.error(f'Failed to save screenshot: {e}')
-					logger.info(f'\n📍 Step {self.n_steps}')
-			else:
-				logger.info(f'\n📍 Step {self.n_steps}')
+
+			if self._stopped or self._paused:
+				logger.debug('Agent paused after getting state')
+				raise InterruptedError
 
 			self.message_manager.add_state_message(state, self._last_result, step_info)
 			input_messages = self.message_manager.get_messages()
@@ -255,6 +246,11 @@ class Agent:
 
 				self._save_conversation(input_messages, model_output)
 				self.message_manager._remove_last_state_message()  # we dont want the whole state in the chat history
+
+				if self._stopped or self._paused:
+					logger.debug('Agent paused after getting next action')
+					raise InterruptedError
+
 				self.message_manager.add_model_output(model_output)
 			except Exception as e:
 				# model call failed, remove last state message from history
@@ -269,6 +265,9 @@ class Agent:
 
 			self.consecutive_failures = 0
 
+		except InterruptedError:
+			logger.debug('Agent paused')
+			return
 		except Exception as e:
 			result = await self._handle_step_error(e)
 			self._last_result = result
@@ -512,7 +511,6 @@ class Agent:
 			await asyncio.sleep(0.2)  # Small delay to prevent CPU spinning
 			if self._stopped:  # Allow stopping while paused
 				return False
-
 		return True
 
 	async def _validate_output(self) -> bool:
@@ -999,7 +997,7 @@ class Agent:
 		if os.path.exists(logo_path):
 			logo = Image.open(logo_path)
 			logo.thumbnail((logo_size, logo_size))
-			frame.paste(logo, (width - logo_size - 20, 20), logo if logo.mode == 'RGBA' else None)
+			frame.paste(logo, (width - logo_size - 20, 20), logo if 'A' in logo.getbands() else None)
 
 		# Create drawing context
 		draw = ImageDraw.Draw(frame)
@@ -1045,7 +1043,7 @@ class Agent:
 			frame.paste(
 				small_logo,
 				(margin - text_padding + 10, 45),  # Positioned inside goal box
-				small_logo if small_logo.mode == 'RGBA' else None,
+				small_logo if 'A' in small_logo.getbands() else None,
 			)
 
 		# Draw text with proper wrapping
@@ -1083,7 +1081,7 @@ class Agent:
 
 	def pause(self) -> None:
 		"""Pause the agent before the next step"""
-		logger.info('🔄 Agent pausing before next step')
+		logger.info('🔄 pausing Agent ')
 		self._paused = True
 
 	def resume(self) -> None:

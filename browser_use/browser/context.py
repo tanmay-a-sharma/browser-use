@@ -258,6 +258,7 @@ class BrowserContext:
 				bypass_csp=self.config.disable_security,
 				ignore_https_errors=self.config.disable_security,
 				record_video_dir=self.config.save_recording_path,
+				record_video_size=self.config.browser_window_size,
 				locale=self.config.locale,
 			)
 
@@ -564,18 +565,21 @@ class BrowserContext:
 		"""Navigate back in history"""
 		page = await self.get_current_page()
 		try:
-			# Add timeout and catch any timeout errors
-			await page.go_back(timeout=5000, wait_until='domcontentloaded')
-			await self._wait_for_page_and_frames_load(timeout_overwrite=1.0)
+			# 10 ms timeout
+			await page.go_back(timeout=10, wait_until='domcontentloaded')
+			# await self._wait_for_page_and_frames_load(timeout_overwrite=1.0)
 		except Exception as e:
-			logger.warning(f'Error during go_back: {e}')
-			# Continue even if there's an error since the navigation might have succeeded
+			# Continue even if its not fully loaded, because we wait later for the page to load
+			logger.debug(f'During go_back: {e}')
 
 	async def go_forward(self):
 		"""Navigate forward in history"""
 		page = await self.get_current_page()
-		await page.go_forward()
-		await page.wait_for_load_state()
+		try:
+			await page.go_forward(timeout=10, wait_until='domcontentloaded')
+		except Exception as e:
+			# Continue even if its not fully loaded, because we wait later for the page to load
+			logger.debug(f'During go_forward: {e}')
 
 	async def close_current_tab(self):
 		"""Close the current tab"""
@@ -680,7 +684,7 @@ class BrowserContext:
 
 		screenshot_b64 = base64.b64encode(screenshot).decode('utf-8')
 
-		await self.remove_highlights()
+		# await self.remove_highlights()
 
 		return screenshot_b64
 
