@@ -7,11 +7,12 @@ import json
 import logging
 import os
 import platform
+import time
 import textwrap
 import uuid
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Tuple, Union
 
 from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -97,6 +98,7 @@ class Agent:
 		tool_calling_method: Optional[str] = 'auto',
 	):
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
+		self.start_time = time.time()  # Initialize start_time
 
 		# Create screenshots directory
 		self.screenshots_dir = Path.home() / '.browser_use' / 'screenshots' / self.agent_id
@@ -177,6 +179,7 @@ class Agent:
 
 		self._paused = False
 		self._stopped = False
+		self.alternative_tasks = {}  # Store tasks by step number
 
 	def _set_version_and_source(self) -> None:
 		try:
@@ -249,6 +252,13 @@ class Agent:
 					logger.debug(f"Failed to save screenshot: {str(e)}")
 			
 			logger.info(f'\n📍 Step {self.n_steps}')
+			
+			# Generate alternative tasks in background without logging
+			if state:
+				alternative_tasks = await self._generate_alternative_tasks(state, self.n_steps)
+				if alternative_tasks:
+					self.alternative_tasks[self.n_steps] = alternative_tasks
+			
 			state = await self.browser_context.get_state(use_vision=self.use_vision)
 
 			if self._stopped or self._paused:
@@ -308,6 +318,13 @@ class Agent:
 
 			if state:
 				self._make_history_item(model_output, state, result)
+
+				# Generate and log alternative tasks
+				alternative_tasks = await self._generate_alternative_tasks(state, self.n_steps)
+				if alternative_tasks:
+					logger.info("🎯 Potential Complex Methods:")
+					for task in alternative_tasks:
+						logger.info(f"  • {task}")
 
 	async def _handle_step_error(self, error: Exception) -> list[ActionResult]:
 		"""Handle all types of errors that can occur during a step"""
@@ -461,7 +478,56 @@ class Agent:
 		"""Execute the task with maximum number of steps"""
 		try:
 			self._log_agent_run()
+			await self._run_task(max_steps)
+			
+			# Log completion status
+			if self.history.is_done():
+				logger.info('✅ Task completed successfully')
+			else:
+				logger.info('❌ Failed to complete task in maximum steps')
+			
+			# Log alternative tasks summary if task completed successfully
+			if hasattr(self, 'alternative_tasks') and self.alternative_tasks and self.history.is_done():
+				logger.info("\n🎯 Alternative Task Summary")
+				logger.info("=" * 50)
+				for step_num, tasks in sorted(self.alternative_tasks.items()):
+					logger.info(f"\n📍 Step {step_num} Alternative Tasks:")
+					for task in tasks:
+						logger.info(f"\n• {task}")
+				logger.info("=" * 50)
+			
+			# Create GIF if enabled
+			if self.generate_gif:
+				output_path: str = 'agent_history.gif'
+				if isinstance(self.generate_gif, str):
+					output_path = self.generate_gif
+				self.create_history_gif(output_path=output_path)
+				logger.info(f'Created GIF at {output_path}')
+			
+			return self.history
+			
+		finally:
+			if hasattr(self, 'start_time'):
+				total_time = time.time() - self.start_time
+			else:
+				total_time = 0
+				
+			self.telemetry.capture(
+				AgentEndTelemetryEvent(
+					agent_id=str(id(self)),
+					steps=self.n_steps,
+					max_steps_reached=self.n_steps >= max_steps,
+					success=self.history.is_done(),
+					errors=[],
+				)
+			)
+			
+			if not self.injected_browser and self.browser:
+				await self.browser.close()
 
+	async def _run_task(self, max_steps: int) -> None:
+		"""Run the task with maximum number of steps"""
+		try:
 			# Execute initial actions if provided
 			if self.initial_actions:
 				result = await self.controller.multi_act(self.initial_actions, self.browser_context, check_for_new_elements=False)
@@ -482,37 +548,12 @@ class Agent:
 						if not await self._validate_output():
 							continue
 
-					logger.info('✅ Task completed successfully')
-					if self.register_done_callback:
-						self.register_done_callback(self.history)
 					break
 			else:
 				logger.info('❌ Failed to complete task in maximum steps')
 
-			return self.history
-		finally:
-			self.telemetry.capture(
-				AgentEndTelemetryEvent(
-					agent_id=self.agent_id,
-					success=self.history.is_done(),
-					steps=self.n_steps,
-					max_steps_reached=self.n_steps >= max_steps,
-					errors=self.history.errors(),
-				)
-			)
-
-			if not self.injected_browser_context:
-				await self.browser_context.close()
-
-			if not self.injected_browser and self.browser:
-				await self.browser.close()
-
-			if self.generate_gif:
-				output_path: str = 'agent_history.gif'
-				if isinstance(self.generate_gif, str):
-					output_path = self.generate_gif
-
-				self.create_history_gif(output_path=output_path)
+		except Exception as e:
+			logger.error(f'❌ Task failed: {str(e)}')
 
 	def _too_many_failures(self) -> bool:
 		"""Check if we should stop due to too many failures"""
@@ -539,7 +580,6 @@ class Agent:
 			f'You are a validator of an agent who interacts with a browser. '
 			f'Validate if the output of last action is what the user wanted and if the task is completed. '
 			f'If the task is unclear defined, you can let it pass. But if something is missing or the image does not show what was requested dont let it pass. '
-			f'Try to understand the page and help the model with suggestions like scroll, do x, ... to get the solution right. '
 			f'Task to validate: {self.task}. Return a JSON object with 2 keys: is_valid and reason. '
 			f'is_valid is a boolean that indicates if the output is correct. '
 			f'reason is a string that explains why it is valid or not.'
@@ -1135,3 +1175,60 @@ class Agent:
 			converted_actions.append(action_model)
 
 		return converted_actions
+
+	async def _generate_alternative_tasks(self, state: BrowserState, step_num: int) -> list[str]:
+		"""Generate alternative complex tasks based on the current browser state"""
+		try:
+			# Create a prompt for task generation
+			prompt = {
+				"role": "system",
+				"content": f"Generate 3 alternative complex tasks for step {step_num} on page {state.title} ({state.url}). Format as '[Name] - Goal: [goal] • Steps: [steps] • Validation: [validation]'"
+			}
+			
+			# Get task suggestions from LLM
+			response = await self.llm.ainvoke([prompt])
+			if response and hasattr(response, 'content'):
+				tasks = response.content.strip().split('\n\n')
+				return [t.strip() for t in tasks if t and len(t) > 30]
+			return []
+		except Exception as e:
+			logger.debug(f"Failed to generate alternative tasks: {str(e)}")
+			return []
+
+	async def _handle_step(self, step_info: Optional[AgentStepInfo] = None) -> AgentStepInfo:
+		"""Handle one step of the task."""
+		try:
+			# Get current browser state
+			state = await self.browser.get_state()
+			
+			# Generate response from LLM
+			response = await self._get_llm_response(state, step_info)
+			
+			# Extract action and alternative tasks from response
+			action = self._extract_action(response)
+			alternative_tasks = self._extract_alternative_tasks(response)
+			
+			# Store alternative tasks for this step
+			if alternative_tasks:
+				if not hasattr(self, 'alternative_tasks'):
+					self.alternative_tasks = {}
+				self.alternative_tasks[self.n_steps + 1] = alternative_tasks
+			
+			# Execute action
+			result = await self._execute_action(action)
+			
+			# Create step info
+			step_info = AgentStepInfo(
+				action=action,
+				result=result,
+				state=state,
+				response=response,
+			)
+			
+			# Reset consecutive failures on success
+			self.consecutive_failures = 0
+			
+			return step_info
+			
+		except Exception as e:
+			return await self._handle_step_error(e, step_info)
