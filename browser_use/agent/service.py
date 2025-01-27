@@ -98,6 +98,10 @@ class Agent:
 	):
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
 
+		# Create screenshots directory
+		self.screenshots_dir = Path.home() / '.browser_use' / 'screenshots' / self.agent_id
+		self.screenshots_dir.mkdir(parents=True, exist_ok=True)
+
 		self.task = task
 		self.use_vision = use_vision
 		self.llm = llm
@@ -223,12 +227,28 @@ class Agent:
 	@time_execution_async('--step')
 	async def step(self, step_info: Optional[AgentStepInfo] = None) -> None:
 		"""Execute one step of the task"""
-		logger.info(f'\n📍 Step {self.n_steps}')
-		state = None
-		model_output = None
-		result: list[ActionResult] = []
-
 		try:
+			# Get current state
+			state = await self.browser_context.get_state(use_vision=self.use_vision)
+			
+			# Save screenshot for this step if available
+			if state and state.screenshot:
+				try:
+					import base64
+					screenshot_data = base64.b64decode(state.screenshot)
+					# Ensure screenshot is valid PNG data
+					from PIL import Image
+					import io
+					img = Image.open(io.BytesIO(screenshot_data))
+					img.verify()  # Verify it's a valid image
+					# Save the screenshot in the persistent directory
+					screenshot_path = self.screenshots_dir / f'step_{self.n_steps}_screenshot.png'
+					with open(screenshot_path, 'wb') as f:
+						f.write(screenshot_data)
+				except Exception as e:
+					logger.debug(f"Failed to save screenshot: {str(e)}")
+			
+			logger.info(f'\n📍 Step {self.n_steps}')
 			state = await self.browser_context.get_state(use_vision=self.use_vision)
 
 			if self._stopped or self._paused:
@@ -997,7 +1017,7 @@ class Agent:
 		if os.path.exists(logo_path):
 			logo = Image.open(logo_path)
 			logo.thumbnail((logo_size, logo_size))
-			frame.paste(logo, (width - logo_size - 20, 20), logo if 'A' in logo.getbands() else None)
+			frame.paste(logo, (width - logo_size - 20, 20), logo if logo.mode == 'RGBA' else None)
 
 		# Create drawing context
 		draw = ImageDraw.Draw(frame)
@@ -1043,7 +1063,7 @@ class Agent:
 			frame.paste(
 				small_logo,
 				(margin - text_padding + 10, 45),  # Positioned inside goal box
-				small_logo if 'A' in small_logo.getbands() else None,
+				small_logo if small_logo.mode == 'RGBA' else None,
 			)
 
 		# Draw text with proper wrapping
