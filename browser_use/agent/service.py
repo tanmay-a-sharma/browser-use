@@ -486,14 +486,12 @@ class Agent:
 			else:
 				logger.info('❌ Failed to complete task in maximum steps')
 			
-			# Log alternative tasks summary if task completed successfully
-			if hasattr(self, 'alternative_tasks') and self.alternative_tasks and self.history.is_done():
-				logger.info("\n🎯 Alternative Task Summary")
+			# Show related tasks by complexity
+			if hasattr(self, 'alternative_tasks') and self.alternative_tasks.get(1):  # Only show tasks from first step
+				logger.info("\n🎯 Related Tasks by Increasing Complexity")
 				logger.info("=" * 50)
-				for step_num, tasks in sorted(self.alternative_tasks.items()):
-					logger.info(f"\n📍 Step {step_num} Alternative Tasks:")
-					for task in tasks:
-						logger.info(f"\n• {task}")
+				for i, task in enumerate(self.alternative_tasks[1], 1):
+					logger.info(f"\n{i}. {task}")
 				logger.info("=" * 50)
 			
 			# Create GIF if enabled
@@ -1176,13 +1174,84 @@ class Agent:
 
 		return converted_actions
 
+	async def _get_llm_response(self, state: BrowserState, step_info: Optional[AgentStepInfo] = None) -> str:
+		"""Get response from LLM"""
+		# Create message
+		message = self.message_manager.create_message(state, step_info)
+		
+		# Only add task generation prompt for the first step
+		if self.n_steps == 1:
+			task = self.message_manager.task
+			message += f"""
+			\n\nThe original task is: "{task}"
+			Generate 10 increasingly complex tasks that are variations of analyzing NVIDIA's quarterly market cap data.
+			
+			Here are examples of the exact type of tasks to generate, with increasing complexity:
+			1. Find and compare NVIDIA's market cap for the last two quarters
+			2. Calculate the percentage change in NVIDIA's quarterly market cap year-over-year
+			3. Compare NVIDIA's quarterly market cap growth with AMD's over the past year
+			4. Analyze how NVIDIA's quarterly market cap correlates with their quarterly revenue
+			5. Study the impact of product launches on NVIDIA's quarterly market cap changes
+			6. Calculate and visualize quarterly market cap trends against industry benchmarks
+			7. Build a statistical model comparing NVIDIA's market cap with key financial metrics
+			8. Develop a regression model to predict next quarter's market cap using multiple variables
+			9. Create a machine learning model to forecast NVIDIA's market cap using historical data
+			10. Design a comprehensive market cap analysis system incorporating real-time data feeds
+			
+			Format exactly as:
+			🎯 NVIDIA Market Cap Analysis Tasks:
+			1. [Basic market cap analysis task]
+			2. [Slightly more complex market cap task]
+			...
+			10. [Most complex market cap analysis]
+			
+			CRITICAL REQUIREMENTS:
+			- Every task MUST analyze NVIDIA's market cap data
+			- Tasks MUST progress from simple comparisons to complex analysis
+			- NO tasks about browsers, UI, or unrelated topics
+			- Each task should require more analytical skill than the previous one
+			- All tasks should help understand NVIDIA's market value trends"""
+		
+		# Get response
+		response = await self.llm.chat_completion(message)
+		
+		return response
+
+	async def _extract_alternative_tasks(self, response: str) -> List[str]:
+		"""Extract alternative tasks from LLM response"""
+		try:
+			# Only extract tasks from first step response
+			if self.n_steps != 1:
+				return []
+				
+			# Extract tasks between markers
+			if "🎯 NVIDIA Market Cap Analysis Tasks:" not in response:
+				return []
+				
+			tasks_text = response.split("🎯 NVIDIA Market Cap Analysis Tasks:")[1].strip()
+			tasks = []
+			
+			# Split by numbered items and filter empty
+			for line in tasks_text.split("\n"):
+				if any(line.strip().startswith(f"{i}.") for i in range(1, 11)):
+					# This is a numbered task
+					task = line.strip()[2:].strip()  # Remove number and whitespace
+					if task and "browser" not in task.lower() and "tab" not in task.lower():
+						tasks.append(task)
+						
+			return tasks[:10]  # Return up to 10 tasks
+			
+		except Exception as e:
+			logger.debug(f"Failed to generate related tasks: {str(e)}")
+			return []
+
 	async def _generate_alternative_tasks(self, state: BrowserState, step_num: int) -> list[str]:
 		"""Generate alternative complex tasks based on the current browser state"""
 		try:
 			# Create a prompt for task generation
 			prompt = {
 				"role": "system",
-				"content": f"Generate 3 alternative complex tasks for step {step_num} on page {state.title} ({state.url}). Format as '[Name] - Goal: [goal] • Steps: [steps] • Validation: [validation]'"
+				"content": f"Generate 10 increasingly complex related tasks for step {step_num} on page {state.title} ({state.url}). Format as:\n🎯 Related Tasks by Complexity:\n1. [Simple task description]\n2. [Slightly more complex task]\n...\n10. [Most complex task]"
 			}
 			
 			# Get task suggestions from LLM
@@ -1194,41 +1263,3 @@ class Agent:
 		except Exception as e:
 			logger.debug(f"Failed to generate alternative tasks: {str(e)}")
 			return []
-
-	async def _handle_step(self, step_info: Optional[AgentStepInfo] = None) -> AgentStepInfo:
-		"""Handle one step of the task."""
-		try:
-			# Get current browser state
-			state = await self.browser.get_state()
-			
-			# Generate response from LLM
-			response = await self._get_llm_response(state, step_info)
-			
-			# Extract action and alternative tasks from response
-			action = self._extract_action(response)
-			alternative_tasks = self._extract_alternative_tasks(response)
-			
-			# Store alternative tasks for this step
-			if alternative_tasks:
-				if not hasattr(self, 'alternative_tasks'):
-					self.alternative_tasks = {}
-				self.alternative_tasks[self.n_steps + 1] = alternative_tasks
-			
-			# Execute action
-			result = await self._execute_action(action)
-			
-			# Create step info
-			step_info = AgentStepInfo(
-				action=action,
-				result=result,
-				state=state,
-				response=response,
-			)
-			
-			# Reset consecutive failures on success
-			self.consecutive_failures = 0
-			
-			return step_info
-			
-		except Exception as e:
-			return await self._handle_step_error(e, step_info)
