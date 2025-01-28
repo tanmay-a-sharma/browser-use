@@ -59,12 +59,13 @@ T = TypeVar('T', bound=BaseModel)
 
 # Get the project root by finding the 'browser-use' directory
 def get_project_root() -> Path:
+    """Get the project root directory. Returns a Path object relative to the browser-use root."""
     current = Path(__file__).resolve()
     while current.name != 'browser-use':
         current = current.parent
         if current == current.parent:  # reached root without finding browser-use
             raise RuntimeError("Could not find browser-use directory in path")
-    return current
+    return Path('browser-use')  # Return relative path
 
 PROJECT_ROOT = get_project_root()
 
@@ -111,7 +112,7 @@ class Agent:
 		self.start_time = time.time()  # Initialize start_time
 
 		# Create screenshots directory relative to browser-use root
-		screenshots_base = PROJECT_ROOT / 'screenshots'
+		screenshots_base = Path('browser-use/screenshots')
 		
 		try:
 			# Ensure base directory exists

@@ -84,15 +84,17 @@ def setup_logging():
 			if hasattr(record, 'msg') and isinstance(record.msg, str):
 				if '📍 Step' in record.msg:
 					step_num = record.msg.split('Step')[-1].strip()
-					# Check for screenshot in the persistent directory
+					# Check for screenshot in the project directory
 					from pathlib import Path
-					screenshots_dir = Path.home() / '.browser_use' / 'screenshots'
+					# Use relative path from project root
+					screenshots_dir = Path('browser-use/screenshots')
 					# Find the most recent agent directory
 					try:
 						agent_dir = sorted(screenshots_dir.glob('*'), key=lambda x: x.stat().st_mtime)[-1]
 						screenshot_path = agent_dir / f'step_{step_num}_screenshot.png'
 						if screenshot_path.exists():
-							record.msg = f"{record.msg} <a href='file://{screenshot_path.absolute()}'>📸 View Screenshot</a>"
+							# Use relative path in the href
+							record.msg = f"{record.msg} <a href='{screenshot_path}'>📸 View Screenshot</a>"
 					except (IndexError, FileNotFoundError):
 						pass
 				
