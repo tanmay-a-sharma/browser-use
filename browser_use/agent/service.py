@@ -57,6 +57,16 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
 
+# Get the project root by finding the 'browser-use' directory
+def get_project_root() -> Path:
+    current = Path(__file__).resolve()
+    while current.name != 'browser-use':
+        current = current.parent
+        if current == current.parent:  # reached root without finding browser-use
+            raise RuntimeError("Could not find browser-use directory in path")
+    return current
+
+PROJECT_ROOT = get_project_root()
 
 class Agent:
 	def __init__(
@@ -100,9 +110,8 @@ class Agent:
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
 		self.start_time = time.time()  # Initialize start_time
 
-		# Create screenshots directory relative to the package
-		package_root = Path(__file__).parent.parent  # browser_use directory
-		screenshots_base = package_root.parent / 'screenshots'  # up one level to project root, then screenshots
+		# Create screenshots directory relative to browser-use root
+		screenshots_base = PROJECT_ROOT / 'screenshots'
 		
 		try:
 			# Ensure base directory exists
