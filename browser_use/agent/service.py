@@ -100,10 +100,26 @@ class Agent:
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
 		self.start_time = time.time()  # Initialize start_time
 
-		# Create screenshots directory
-		self.screenshots_dir = Path(__file__).parent.parent.parent / 'screenshots' / self.agent_id
-		self.screenshots_dir.mkdir(parents=True, exist_ok=True)
-
+		# Create screenshots directory relative to the package
+		package_root = Path(__file__).parent.parent  # browser_use directory
+		screenshots_base = package_root.parent / 'screenshots'  # up one level to project root, then screenshots
+		
+		try:
+			# Ensure base directory exists
+			screenshots_base.mkdir(parents=True, exist_ok=True)
+			
+			# Create agent-specific directory
+			self.screenshots_dir = screenshots_base / self.agent_id
+			self.screenshots_dir.mkdir(parents=True, exist_ok=True)
+		except (OSError, PermissionError) as e:
+			# If we can't create/access the directory, fall back to a temporary directory
+			import tempfile
+			temp_dir = Path(tempfile.gettempdir()) / 'browser_use_screenshots'
+			temp_dir.mkdir(parents=True, exist_ok=True)
+			self.screenshots_dir = temp_dir / self.agent_id
+			self.screenshots_dir.mkdir(parents=True, exist_ok=True)
+			logger.warning(f"Could not create screenshots directory at {screenshots_base}. Falling back to {self.screenshots_dir}")
+		
 		self.task = task
 		self.use_vision = use_vision
 		self.llm = llm
