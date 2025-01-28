@@ -51,6 +51,7 @@ from browser_use.telemetry.views import (
 	AgentStepTelemetryEvent,
 )
 from browser_use.utils import time_execution_async
+from browser_use.storage.supabase import SupabaseStorage
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -59,13 +60,13 @@ T = TypeVar('T', bound=BaseModel)
 
 # Get the project root by finding the 'browser-use' directory
 def get_project_root() -> Path:
-    """Get the project root directory. Returns a Path object relative to the browser-use root."""
-    current = Path(__file__).resolve()
+    """Get the project root directory by finding the browser-use directory."""
+    current = Path(__file__).resolve().parent
     while current.name != 'browser-use':
-        current = current.parent
         if current == current.parent:  # reached root without finding browser-use
             raise RuntimeError("Could not find browser-use directory in path")
-    return Path('browser-use')  # Return relative path
+        current = current.parent
+    return current
 
 PROJECT_ROOT = get_project_root()
 
@@ -111,8 +112,14 @@ class Agent:
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
 		self.start_time = time.time()  # Initialize start_time
 
-		# Create screenshots directory relative to browser-use root
-		screenshots_base = Path('browser-use/screenshots')
+		try:
+			self.storage = SupabaseStorage()
+		except Exception as e:
+			logger.error(f"Failed to initialize Supabase storage: {str(e)}")
+			raise
+
+		# Create screenshots directory relative to the project root
+		screenshots_base = Path('screenshots')  # This will be relative to wherever the code is run
 		
 		try:
 			# Ensure base directory exists
@@ -121,8 +128,8 @@ class Agent:
 			# Create agent-specific directory
 			self.screenshots_dir = screenshots_base / self.agent_id
 			self.screenshots_dir.mkdir(parents=True, exist_ok=True)
-		except (OSError, PermissionError) as e:
-			# If we can't create/access the directory, fall back to a temporary directory
+		except Exception as e:
+			# Fallback to temp directory if we can't create in the current directory
 			import tempfile
 			temp_dir = Path(tempfile.gettempdir()) / 'browser_use_screenshots'
 			temp_dir.mkdir(parents=True, exist_ok=True)
@@ -263,17 +270,17 @@ class Agent:
 			# Save screenshot for this step if available
 			if state and state.screenshot:
 				try:
-					import base64
+					# Convert base64 screenshot to bytes
 					screenshot_data = base64.b64decode(state.screenshot)
-					# Ensure screenshot is valid PNG data
-					from PIL import Image
-					import io
-					img = Image.open(io.BytesIO(screenshot_data))
-					img.verify()  # Verify it's a valid image
-					# Save the screenshot in the persistent directory
-					screenshot_path = self.screenshots_dir / f'step_{self.n_steps}_screenshot.png'
-					with open(screenshot_path, 'wb') as f:
-						f.write(screenshot_data)
+					
+					# Save screenshot to Supabase
+					screenshot_url = self.storage.save_screenshot(
+						self.agent_id,
+						self.n_steps,
+						screenshot_data
+					)
+					logger.debug(f"Saved screenshot to Supabase: {screenshot_url}")
+					
 				except Exception as e:
 					logger.debug(f"Failed to save screenshot: {str(e)}")
 			
