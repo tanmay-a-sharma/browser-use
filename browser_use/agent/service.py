@@ -101,7 +101,7 @@ class Agent:
 		self.start_time = time.time()  # Initialize start_time
 
 		# Create screenshots directory
-		self.screenshots_dir = Path.home() / '.browser_use' / 'screenshots' / self.agent_id
+		self.screenshots_dir = Path(__file__).parent.parent.parent / 'screenshots' / self.agent_id
 		self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
 		self.task = task
