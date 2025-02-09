@@ -47,7 +47,7 @@ async def main():
 	   - Username/Email: {username}
 	   - Password: {password}
 	3. Go to men's pants section
-	4. Find and add a pair of pants to the cart
+	4. Find and add a size 32 pair of pants to the cart
 	
 	Handle any popups or notifications that appear during the process.
 	Make sure to complete the login process before proceeding to shopping."""
