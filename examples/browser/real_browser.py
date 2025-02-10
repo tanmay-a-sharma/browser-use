@@ -81,16 +81,7 @@ async def main():
 	assistant = ShoppingAssistant()
 	
 	# Example task that references sensitive data
-	shopping_task = """Go to vuoriclothing.com and perform the following tasks:
-	1. Navigate to the website (https://vuoriclothing.com)
-	2. When you need to log in, use:
-	   - Username from sensitive_data['auth_username']
-	   - Password from sensitive_data['auth_password']
-	3. Go to men's pants section
-	4. Find and add a size 32 pair of pants to the cart
-	
-	Handle any popups or notifications that appear during the process.
-	Remember: The login credentials are available in sensitive_data when you need them."""
+	shopping_task = """Go to vuoriclothing.com, log in, go to the men's pants section, and add a size 32 pair of pants to the cart. Handle any popups that appear."""
 
 	try:
 		await assistant.execute_task(shopping_task, website='vuoriclothing.com')
